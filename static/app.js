@@ -48,7 +48,10 @@ function applySettingsToForm() {
   $$("[data-key]").forEach((el) => {
     if (el.dataset.key in settings) writeInput(el, settings[el.dataset.key]);
   });
-  $("#sourceInput").value = settings.camera_source;
+  if (!isDeviceSource(settings.camera_source) && settings.camera_source !== "browser") {
+    $("#sourceInput").value = settings.camera_source;
+  }
+  renderModelInfo();
   const res = `${settings.width}x${settings.height}`;
   const sel = $("#resolution");
   if (![...sel.options].some((o) => o.value === res)) sel.add(new Option(res.replace("x", " × "), res));
@@ -66,17 +69,184 @@ function bindSettings() {
     el.addEventListener(el.type === "range" ? "input" : "change", handler);
   });
 
-  const applySource = () => {
-    const v = $("#sourceInput").value.trim();
-    if (v) { saveSettings({ camera_source: v }, 0); toast(`Источник: <b>${escapeHtml(v)}</b>`); }
-  };
-  $("#sourceApply").addEventListener("click", applySource);
-  $("#sourceInput").addEventListener("keydown", (e) => e.key === "Enter" && applySource());
-
   $("#resolution").addEventListener("change", (e) => {
     const [width, height] = e.target.value.split("x").map(Number);
     saveSettings({ width, height }, 0);
   });
+  $("#modelSelect").addEventListener("change", renderModelInfo);
+}
+
+// ------------------------------------------------------------ модели и устройства
+let models = [];
+let devices = [];
+
+async function loadModels() {
+  models = await api("/api/models");
+  const families = [...new Set(models.map((m) => m.family))];
+  $("#modelSelect").innerHTML = families.map((f) => `<optgroup label="${escapeHtml(f)}">` +
+    models.filter((m) => m.family === f).map((m) => {
+      const stats = m.map ? ` — ${m.map} mAP · ${m.params} млн пар.` : "";
+      return `<option value="${escapeHtml(m.id)}">${escapeHtml(m.title)}${stats}${m.downloaded ? "" : " ⬇"}</option>`;
+    }).join("") + "</optgroup>").join("");
+  if (settings.model) $("#modelSelect").value = settings.model;
+  renderModelInfo();
+}
+
+function renderModelInfo() {
+  const m = models.find((x) => x.id === $("#modelSelect").value);
+  const box = $("#modelInfo");
+  if (!m) { box.innerHTML = ""; return; }
+  if (m.custom) {
+    box.innerHTML = `<p class="muted small">Собственная модель из папки <code>models/</code>. Классы берутся из неё.</p>`;
+    return;
+  }
+  const row = (label, value, pct) => `<div class="mi-row"><span>${label}</span><b>${value}</b></div>` +
+    (pct !== undefined ? `<div class="mi-bar"><span style="width:${pct}%"></span></div>` : "");
+  box.innerHTML =
+    row("Точность (mAP50-95, COCO)", `${m.map}%`, Math.round((m.map / 60) * 100)) +
+    row("Параметров", `${m.params} млн`) +
+    row("Вычислений на кадр", `${m.flops} млрд`) +
+    row("Скорость на CPU (офиц.)", `≈ ${Math.round(m.cpu_ms)} мс/кадр`, Math.round(Math.min(100, (m.cpu_ms / 530) * 100))) +
+    `<p class="muted small">${escapeHtml(m.hint)}. ${m.downloaded ? "Файл уже скачан." : "Будет скачана при выборе."}</p>`;
+}
+
+async function loadDevices() {
+  devices = await api("/api/devices");
+  $("#deviceSelect").innerHTML = devices.map((d) =>
+    `<option value="${escapeHtml(d.id)}" ${d.available ? "" : "disabled"}>${escapeHtml(d.title)}</option>`).join("");
+  $("#deviceSelect").value = settings.device;
+}
+
+// ------------------------------------------------------------ источник видео
+let hostCameras = [];
+const isDeviceSource = (src) => /^\d+$/.test(String(src));
+const browserMode = () => { try { return localStorage.getItem("browserMode") || "camera"; } catch { return "camera"; } };
+const setBrowserMode = (m) => { try { localStorage.setItem("browserMode", m); } catch { /* приватный режим */ } };
+
+async function loadHostCameras(refresh = false) {
+  try {
+    hostCameras = await api("/api/cameras" + (refresh ? "?refresh=1" : ""));
+  } catch { hostCameras = []; }
+  renderSourceSelect();
+  if (refresh) toast(hostCameras.length ? `Найдено камер: ${hostCameras.length}` : "Камеры на компьютере не найдены");
+}
+
+function currentSourceValue() {
+  const src = settings.camera_source;
+  if (src === "browser") return `browser-${browserMode()}`;
+  if (isDeviceSource(src)) return `cam:${src}`;
+  return "url";
+}
+
+function renderSourceSelect() {
+  const cams = [...hostCameras];
+  if (isDeviceSource(settings.camera_source) && !cams.some((c) => String(c.index) === settings.camera_source)) {
+    cams.push({ index: Number(settings.camera_source), name: `Камера ${settings.camera_source}` });
+  }
+  const opt = (v, t, extra = "") => `<option value="${v}" ${extra}>${escapeHtml(t)}</option>`;
+  $("#sourceSelect").innerHTML =
+    `<optgroup label="Камеры компьютера, где запущен сервер">` +
+    (cams.length ? cams.map((c) => opt(`cam:${c.index}`, `📷 ${c.name} (№${c.index})`)).join("")
+                 : opt("", "Камеры не найдены", "disabled")) +
+    `</optgroup><optgroup label="Через браузер (это устройство)">` +
+    opt("browser-camera", "🌐 Камера этого устройства") +
+    opt("browser-screen", "🖥 Экран или окно (захват экрана)") +
+    `</optgroup><optgroup label="Другое">` +
+    opt("url", "🔗 IP-камера, поток или видеофайл…") + `</optgroup>`;
+  $("#sourceSelect").value = currentSourceValue();
+  updateSourceBlocks();
+}
+
+function updateSourceBlocks() {
+  const v = $("#sourceSelect").value;
+  $("#urlBlock").hidden = v !== "url";
+  $("#browserBlock").hidden = !v.startsWith("browser");
+  $("#browserCamField").hidden = v !== "browser-camera";
+  $("#resolutionField").hidden = v === "browser-screen" || v === "url";
+  renderBroadcastState();
+}
+
+async function refreshBrowserCameras() {
+  const cams = await Broadcast.listCameras().catch(() => []);
+  const sel = $("#browserCamSelect");
+  const current = sel.value;
+  sel.innerHTML = `<option value="">По умолчанию (основная камера)</option>` +
+    cams.map((c, i) => `<option value="${escapeHtml(c.deviceId)}">${escapeHtml(c.label || `Камера ${i + 1}`)}</option>`).join("");
+  sel.value = [...sel.options].some((o) => o.value === current) ? current : "";
+}
+
+async function startBroadcast(mode) {
+  setBrowserMode(mode);
+  try {
+    await Broadcast.start(mode,
+      { deviceId: $("#browserCamSelect").value, width: settings.width, height: settings.height },
+      async () => { settings = await api("/api/settings", { method: "POST", body: { camera_source: "browser" } }); });
+    toast(mode === "screen" ? "Трансляция экрана началась" : "Трансляция камеры началась", "success");
+    if (mode === "camera") refreshBrowserCameras();  // названия камер доступны после разрешения
+  } catch (e) {
+    const msg = e.name === "NotAllowedError" ? "Доступ запрещён — разрешите камеру или показ экрана в браузере."
+      : e.name === "NotFoundError" ? "Камера на этом устройстве не найдена."
+      : e.name === "NotReadableError" ? "Камера занята другой программой."
+      : e.message;
+    toast(escapeHtml(msg), "error", 7000);
+  }
+  renderBroadcastState();
+}
+
+function renderBroadcastState() {
+  const v = $("#sourceSelect").value;
+  if (!v || !v.startsWith("browser")) return;
+  const mode = v.slice("browser-".length);
+  const st = Broadcast.stats();
+  const btn = $("#broadcastBtn");
+  const reason = Broadcast.unsupportedReason(mode);
+  btn.disabled = !!reason;
+  btn.textContent = st.running ? "■ Остановить трансляцию" : "▶ Начать трансляцию";
+  btn.classList.toggle("danger", st.running);
+  btn.classList.toggle("primary", !st.running);
+  $("#broadcastInfo").textContent = reason ? reason
+    : st.running ? `Идёт трансляция ${st.mode === "screen" ? "экрана" : "камеры"}` +
+                   (st.size ? ` ${st.size[0]}×${st.size[1]}` : "") + `, отправляется ${st.fps.toFixed(1)} кадр/с`
+    : settings.camera_source === "browser"
+      ? "Сервер ждёт кадры. Нажмите «Начать трансляцию»."
+      : "Кадры с этого устройства будут отправляться на сервер для распознавания.";
+}
+
+function bindSource() {
+  $("#sourceSelect").addEventListener("change", (e) => {
+    const v = e.target.value;
+    if (v.startsWith("cam:")) {
+      Broadcast.stop();
+      saveSettings({ camera_source: v.slice(4) }, 0);
+    } else if (v === "url") {
+      Broadcast.stop();
+      $("#sourceInput").focus();
+    } else {
+      startBroadcast(v.slice("browser-".length)); // сразу, пока действует клик пользователя
+    }
+    updateSourceBlocks();
+  });
+
+  const applyUrl = () => {
+    const v = $("#sourceInput").value.trim();
+    if (v) { saveSettings({ camera_source: v }, 0); toast(`Источник: <b>${escapeHtml(v)}</b>`); }
+  };
+  $("#sourceApply").addEventListener("click", applyUrl);
+  $("#sourceInput").addEventListener("keydown", (e) => e.key === "Enter" && applyUrl());
+
+  $("#camerasRefresh").addEventListener("click", () => loadHostCameras(true));
+  $("#broadcastBtn").addEventListener("click", () => {
+    if (Broadcast.running) Broadcast.stop();
+    else startBroadcast($("#sourceSelect").value.slice("browser-".length));
+  });
+  $("#browserCamSelect").addEventListener("change", () => {
+    if (Broadcast.running && Broadcast.mode === "camera") startBroadcast("camera");
+  });
+  $("#pushFps").addEventListener("input", (e) => {
+    $("#pushFpsOut").textContent = e.target.value;
+    Broadcast.setFps(e.target.value);
+  });
+  Broadcast.onChange = renderBroadcastState;
 }
 
 // ------------------------------------------------------------ классы
@@ -128,10 +298,26 @@ async function pollStatus() {
   }
 }
 
+let lastModel = null;
+
 function renderStatus(s) {
   const pill = $("#livePill");
-  const texts = { running: "В эфире", opening: "Подключение к камере…",
-                  loading_model: "Загрузка модели…", error: "Ошибка", starting: "Запуск…" };
+  const texts = { running: "В эфире", opening: "Подключение к камере…", loading_model: "Загрузка модели…",
+                  error: "Ошибка", starting: "Запуск…", waiting_browser: "Ожидание трансляции из браузера" };
+
+  // источник или модель могли поменять в другой вкладке — синхронизируем
+  if (s.source !== settings.camera_source) {
+    settings.camera_source = s.source;
+    if (s.source !== "browser" && Broadcast.running) Broadcast.stop();
+    renderSourceSelect();
+  }
+  if (s.model && s.model !== lastModel) {
+    if (lastModel) loadModels();  // обновить отметки «скачана»
+    lastModel = s.model;
+  }
+  $("#deviceInfo").textContent = `Сейчас используется: ${s.device}` +
+    (devices.some((d) => d.fix) ? `. ${devices.find((d) => d.fix).fix}` : "");
+  renderBroadcastState();
   pill.className = `live-pill ${s.status}`;
   $("#liveText").textContent = s.error && s.status !== "running" ? s.error : (texts[s.status] || s.status);
 
@@ -178,13 +364,13 @@ async function takeSnapshot() {
 
 // ------------------------------------------------------------ старт
 async function init() {
-  const models = await api("/api/models");
-  $("#modelSelect").innerHTML = models.map((m) => `<option value="${m.id}">${escapeHtml(m.title)}</option>`).join("");
   settings = await api("/api/settings");
-  await loadClasses();
+  await Promise.all([loadModels(), loadDevices(), loadClasses()]);
   applySettingsToForm();
   bindSettings();
   bindClasses();
+  bindSource();
+  loadHostCameras();
 
   $("#snapBtn").addEventListener("click", takeSnapshot);
   document.addEventListener("keydown", (e) => {

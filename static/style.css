@@ -162,3 +162,17 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
   .lb-body { grid-template-columns: 1fr; overflow-y: auto; }
   .lb-info { padding: 0 16px 16px; }
 }
+
+/* ---------- скрытые блоки, карточка модели, источник видео */
+[hidden] { display: none !important; }
+.model-info { background: var(--panel-2); border-radius: 8px; padding: 8px 10px; margin: -2px 0 10px; }
+.model-info:empty { display: none; }
+.mi-row { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 4px; }
+.mi-row b { color: var(--text); }
+.mi-bar { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; margin: 3px 0 4px; }
+.mi-bar span { display: block; height: 100%; background: var(--accent); }
+.model-info p { margin: 6px 0 0; }
+.btn.danger.small { background: rgba(239, 83, 80, .12); }
+optgroup { color: var(--muted); font-style: normal; }
+option { color: var(--text); }
+#deviceInfo, #broadcastInfo { margin: 2px 0 8px; }

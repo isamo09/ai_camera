@@ -42,14 +42,61 @@ def find_free_port(host: str, port: int, attempts: int = 30) -> int:
     raise RuntimeError(f"Не найден свободный порт в диапазоне {port}–{port + attempts - 1}")
 
 
-def lan_ip() -> str | None:
-    """IP-адрес компьютера в локальной сети (чтобы открыть страницу с телефона)."""
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("10.255.255.255", 1))  # пакет никуда не отправляется
-            return s.getsockname()[0]
-    except OSError:
+_VIRTUAL_IFACE = ("vethernet", "vmware", "virtualbox", "vbox", "hyper-v", "wsl", "docker", "veth", "br-",
+                  "virbr", "tun", "tap", "wg", "wireguard", "vpn", "amnezia", "zerotier", "tailscale", "utun",
+                  "loopback", "bluetooth", "awdl", "llw", "bridge")
+
+
+def _iface_rank(name: str) -> int | None:
+    """Приоритет сетевого адаптера: Wi-Fi → Ethernet → прочие; None — виртуальный/служебный."""
+    n = name.lower()
+    if n in ("lo", "lo0"):
         return None
+    if any(n.startswith(k) or f" {k}" in n or f"({k}" in n or k in n.split() for k in _VIRTUAL_IFACE) \
+            or any(k in n for k in ("vmware", "virtualbox", "vethernet", "hyper-v", "wireguard", "openvpn", "amnezia")):
+        return None
+    if any(k in n for k in ("wi-fi", "wifi", "wlan", "wireless", "беспровод")) or n.startswith(("wl", "en0")):
+        return 0
+    if any(k in n for k in ("ethernet", "локальн", "local area")) or n.startswith(("eth", "en")):
+        return 1
+    return 2
+
+
+def lan_ips() -> list[str]:
+    """IP-адреса компьютера в локальной сети (для телефона), лучший — первый. VPN и виртуальные адаптеры пропускаются."""
+    import ipaddress
+
+    found: list[tuple[int, str]] = []
+    try:
+        import psutil
+
+        stats = psutil.net_if_stats()
+        for name, addrs in psutil.net_if_addrs().items():
+            rank = _iface_rank(name)
+            if rank is None or (name in stats and not stats[name].isup):
+                continue
+            for a in addrs:
+                if a.family != socket.AF_INET:
+                    continue
+                ip = ipaddress.ip_address(a.address)
+                if ip.is_private and not ip.is_loopback and not ip.is_link_local:
+                    found.append((rank, a.address))
+    except Exception:  # noqa: BLE001 — psutil нет: берём адрес маршрута по умолчанию
+        pass
+    ips = [ip for _, ip in sorted(found)]
+    if not ips:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("10.255.255.255", 1))  # пакет никуда не отправляется
+                ips.append(s.getsockname()[0])
+        except OSError:
+            pass
+    return ips
+
+
+def lan_ip() -> str | None:
+    ips = lan_ips()
+    return ips[0] if ips else None
 
 
 def can_open_browser() -> bool:
@@ -121,20 +168,137 @@ def find_font() -> str | None:
 
 # ---------------------------------------------------------------- вычисления
 
-def pick_device(preferred: str = "auto") -> str:
-    """cuda (NVIDIA) → mps (Apple Silicon) → cpu."""
-    if preferred and preferred != "auto":
-        return preferred
+def _torch():
     try:
         import torch
+        return torch
     except ImportError:
+        return None
+
+
+def _mps_available(torch) -> bool:
+    mps = getattr(torch.backends, "mps", None) if torch else None
+    return bool(mps is not None and mps.is_available())
+
+
+def pick_device(preferred: str = "auto") -> str:
+    """Возвращает реально доступное устройство: cuda (NVIDIA) → mps (Apple Silicon) → cpu.
+
+    Если запрошено недоступное устройство (например, cuda без видеокарты), выбирается лучшее доступное.
+    """
+    torch = _torch()
+    if torch is None:
         return "cpu"
+    preferred = (preferred or "auto").strip()
+    if preferred == "cpu":
+        return "cpu"
+    if preferred.startswith("cuda") and torch.cuda.is_available():
+        idx = int(preferred.split(":")[1]) if ":" in preferred else 0
+        return f"cuda:{idx}" if idx < torch.cuda.device_count() else "cuda:0"
+    if preferred == "mps" and _mps_available(torch):
+        return "mps"
+    # auto или запрошенное устройство недоступно
     if torch.cuda.is_available():
         return "cuda:0"
-    mps = getattr(torch.backends, "mps", None)
-    if mps is not None and mps.is_available():
+    if _mps_available(torch):
         return "mps"
     return "cpu"
+
+
+def nvidia_gpus_from_driver() -> list[str]:
+    """Видеокарты NVIDIA по данным драйвера (даже если PyTorch собран без CUDA)."""
+    if MACOS:
+        return []
+    import subprocess
+
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                             capture_output=True, text=True, timeout=10)
+        return [ln.strip() for ln in out.stdout.splitlines() if ln.strip()] if out.returncode == 0 else []
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+
+_devices_cache: list[dict] | None = None
+
+
+def list_devices() -> list[dict]:
+    """Все вычислительные устройства компьютера для выбора в интерфейсе."""
+    global _devices_cache
+    if _devices_cache is not None:
+        return _devices_cache
+    torch = _torch()
+    best = pick_device("auto")
+    devices = [{"id": "auto", "title": f"Авто — лучшее доступное: {device_title(best)}", "available": True}]
+    devices.append({"id": "cpu", "title": f"Процессор: {cpu_name()}", "available": True})
+    cuda_count = torch.cuda.device_count() if torch is not None and torch.cuda.is_available() else 0
+    for i in range(cuda_count):
+        props = torch.cuda.get_device_properties(i)
+        devices.append({"id": f"cuda:{i}", "available": True,
+                        "title": f"Видеокарта NVIDIA: {props.name} ({props.total_memory / 1024**3:.0f} ГБ)"})
+    if cuda_count == 0:
+        for name in nvidia_gpus_from_driver():
+            devices.append({"id": "cuda:0", "available": False,
+                            "title": f"Видеокарта NVIDIA: {name} — недоступна, установлен PyTorch без CUDA",
+                            "fix": "Удалите папку .venv и запустите main.py заново — будет установлен PyTorch с CUDA"})
+    if torch is not None and _mps_available(torch):
+        devices.append({"id": "mps", "title": "Графика Apple Silicon (Metal)", "available": True})
+    _devices_cache = devices
+    return devices
+
+
+# ---------------------------------------------------------------- поиск камер
+
+def _preferred_enum_backend():
+    import cv2
+
+    if WINDOWS:
+        return cv2.CAP_DSHOW  # тот же порядок номеров, что и при открытии камеры
+    if MACOS:
+        return getattr(cv2, "CAP_AVFOUNDATION", 1200)
+    return cv2.CAP_V4L2
+
+
+def list_cameras(skip_probe: set[int] | None = None) -> list[dict]:
+    """Камеры, подключённые к компьютеру: [{"index": 0, "name": "USB CAMERA"}, ...]."""
+    try:
+        from cv2_enumerate_cameras import enumerate_cameras
+
+        seen, cams = set(), []
+        for c in enumerate_cameras(_preferred_enum_backend()):
+            if c.index in seen:
+                continue
+            seen.add(c.index)
+            cams.append({"index": c.index, "name": c.name or f"Камера {c.index}"})
+        if cams or not LINUX:
+            return cams
+    except Exception:  # noqa: BLE001 — пакета нет или ОС не поддерживается
+        pass
+
+    if LINUX:  # имена устройств из sysfs
+        cams = []
+        for dev in sorted(Path("/sys/class/video4linux").glob("video*")):
+            try:
+                idx = int(dev.name.replace("video", ""))
+                cams.append({"index": idx, "name": (dev / "name").read_text().strip()})
+            except (OSError, ValueError):
+                continue
+        if cams:
+            return cams
+
+    # Последний вариант — пробуем открыть первые номера (занятую нами камеру не трогаем)
+    import cv2
+
+    cams = []
+    for idx in range(4):
+        if skip_probe and idx in skip_probe:
+            cams.append({"index": idx, "name": f"Камера {idx}"})
+            continue
+        cap = cv2.VideoCapture(idx)
+        if cap.isOpened():
+            cams.append({"index": idx, "name": f"Камера {idx}"})
+        cap.release()
+    return cams
 
 
 def device_title(device: str) -> str:

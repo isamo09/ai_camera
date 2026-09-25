@@ -16,7 +16,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 VENV_DIR = BASE_DIR / ".venv"
 REQUIREMENTS = BASE_DIR / "requirements.txt"
-REQUIRED_MODULES = ("flask", "cv2", "ultralytics", "PIL", "numpy")
+REQUIRED_MODULES = ("flask", "cv2", "ultralytics", "PIL", "numpy", "cv2_enumerate_cameras", "cryptography")
 MIN_PYTHON = (3, 9)
 FLAG = "AI_CAMERA_BOOTSTRAPPED"
 

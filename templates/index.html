@@ -35,11 +35,61 @@
     </div>
 
     <details class="card" open>
+      <summary>Источник видео</summary>
+      <label class="field">Откуда брать видео
+        <div class="inline">
+          <select id="sourceSelect"></select>
+          <button class="btn small" id="camerasRefresh" title="Найти камеры заново">⟳</button>
+        </div>
+      </label>
+
+      <div id="urlBlock" hidden>
+        <label class="field">Адрес потока или путь к видеофайлу
+          <div class="inline">
+            <input type="text" id="sourceInput" placeholder="rtsp://…, http://…, C:ideo.mp4">
+            <button class="btn small" id="sourceApply">OK</button>
+          </div>
+        </label>
+      </div>
+
+      <div id="browserBlock" hidden>
+        <label class="field" id="browserCamField">Камера этого устройства
+          <select id="browserCamSelect"><option value="">По умолчанию</option></select>
+        </label>
+        <label class="field">Кадров в секунду на сервер <output id="pushFpsOut">15</output>
+          <input type="range" id="pushFps" min="2" max="30" step="1" value="15">
+        </label>
+        <div class="row-btns">
+          <button class="btn primary small" id="broadcastBtn">▶ Начать трансляцию</button>
+        </div>
+        <p class="muted small" id="broadcastInfo"></p>
+      </div>
+
+      <label class="field" id="resolutionField">Разрешение
+        <select id="resolution">
+          <option value="640x480">640 × 480</option>
+          <option value="1280x720">1280 × 720 (HD)</option>
+          <option value="1920x1080">1920 × 1080 (Full HD)</option>
+        </select>
+      </label>
+      <label class="switch"><input type="checkbox" data-key="mirror"><span>Зеркально отразить</span></label>
+      <label class="field">Качество видео <output data-for="jpeg_quality"></output>
+        <input type="range" data-key="jpeg_quality" min="30" max="95" step="5">
+      </label>
+      <p class="muted small" id="frameInfo"></p>
+    </details>
+
+    <details class="card">
       <summary>Распознавание</summary>
       <label class="switch"><input type="checkbox" data-key="detect_enabled"><span>Включить распознавание</span></label>
+      <label class="field">Вычислительное устройство
+        <select data-key="device" id="deviceSelect"></select>
+      </label>
+      <p class="muted small" id="deviceInfo"></p>
       <label class="field">Модель
         <select data-key="model" id="modelSelect"></select>
       </label>
+      <div class="model-info" id="modelInfo"></div>
       <label class="field">Порог уверенности <output data-for="confidence"></output>
         <input type="range" data-key="confidence" min="0.05" max="0.95" step="0.05">
       </label>
@@ -87,28 +137,10 @@
       </label>
     </details>
 
-    <details class="card">
-      <summary>Камера</summary>
-      <label class="field">Источник (номер камеры или URL)
-        <div class="inline">
-          <input type="text" id="sourceInput" placeholder="0, 1, rtsp://…, http://…">
-          <button class="btn small" id="sourceApply">OK</button>
-        </div>
-      </label>
-      <label class="field">Разрешение
-        <select id="resolution">
-          <option value="640x480">640 × 480</option>
-          <option value="1280x720">1280 × 720 (HD)</option>
-          <option value="1920x1080">1920 × 1080 (Full HD)</option>
-        </select>
-      </label>
-      <label class="switch"><input type="checkbox" data-key="mirror"><span>Зеркально отразить</span></label>
-      <label class="field">Качество видео <output data-for="jpeg_quality"></output>
-        <input type="range" data-key="jpeg_quality" min="30" max="95" step="5">
-      </label>
-      <p class="muted small" id="frameInfo"></p>
-    </details>
   </aside>
 </main>
 {% endblock %}
-{% block scripts %}<script src="{{ url_for('static', filename='app.js') }}"></script>{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='broadcast.js') }}"></script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+{% endblock %}

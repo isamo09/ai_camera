@@ -1,6 +1,12 @@
-"""Фоновый поток: захват кадров с камеры (OpenCV) -> распознавание -> JPEG для веб-страницы."""
+"""Фоновый поток: получение кадров -> распознавание -> JPEG для веб-страницы.
+
+Источники кадров:
+  * камера компьютера или IP-камера — через OpenCV (cv2.VideoCapture);
+  * браузер — страница сама присылает кадры (камера ноутбука/телефона или захват экрана).
+"""
 from __future__ import annotations
 
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -39,6 +45,19 @@ class CameraWorker:
         self.error: str | None = None
         self.frame_size = (0, 0)
         self.backend = ""
+        self.frame_source: str | None = None  # источник, с которого пришёл последний кадр
+        self.open_index: int | None = None  # номер открытой камеры компьютера
+
+        self._cap: cv2.VideoCapture | None = None
+        self._opened_key = None
+        self._file_interval = 0.0  # для видеофайлов — пауза между кадрами
+        self._file_next = 0.0
+        # Кадры, присылаемые браузером (камера телефона/ноутбука, захват экрана)
+        self._push_cond = threading.Condition()
+        self._pushed: np.ndarray | None = None
+        self._push_id = 0
+        self._push_seen = 0
+        self._push_time = 0.0
 
     # ------------------------------------------------------------ public API
     def start(self):
@@ -46,11 +65,25 @@ class CameraWorker:
 
     def stop(self):
         self._stop.set()
+        with self._push_cond:
+            self._push_cond.notify_all()
         self._thread.join(timeout=3)
 
     def detections(self) -> list[Detection]:
         with self._cond:
             return list(self._dets)
+
+    def push_frame(self, data: bytes) -> bool:
+        """Принимает JPEG/PNG-кадр от браузера."""
+        frame = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+        if frame is None:
+            return False
+        with self._push_cond:
+            self._pushed = frame
+            self._push_id += 1
+            self._push_time = time.monotonic()
+            self._push_cond.notify_all()
+        return True
 
     def snapshot(self) -> Snapshot | None:
         with self._cond:
@@ -106,52 +139,93 @@ class CameraWorker:
         s = self.store.get()
         self._publish(placeholder_frame(text, 1280, 720), None, [], s.jpeg_quality)
 
+    def _release(self):
+        if self._cap is not None:
+            self._cap.release()
+        self._cap, self._opened_key, self.open_index = None, None, None
+
+    def _read_device(self, s) -> np.ndarray | None:
+        """Кадр с камеры компьютера или IP-камеры (OpenCV)."""
+        key = (s.camera_source, s.width, s.height)
+        if self._cap is None or key != self._opened_key:
+            self._release()
+            self.status = "opening"
+            cap = self._open(*key)
+            if not cap.isOpened():
+                cap.release()
+                self.status = "error"
+                self.error = f"Не удалось открыть камеру «{s.camera_source}»"
+                self._placeholder(self.error + "\n" + camera_hint())
+                self._stop.wait(2)
+                return None
+            self._cap, self._opened_key = cap, key
+            self.open_index = int(s.camera_source) if s.camera_source.isdigit() else None
+            # Видеофайл: воспроизводим по кругу с его собственной частотой кадров
+            is_file = not s.camera_source.isdigit() and os.path.isfile(s.camera_source)
+            fps = cap.get(cv2.CAP_PROP_FPS) if is_file else 0
+            self._file_interval = 1.0 / fps if is_file and 0 < fps < 240 else 0.0
+            self._file_next = time.perf_counter()
+            if is_file:
+                self.backend = "видеофайл"
+
+        if self._file_interval:
+            delay = self._file_next - time.perf_counter()
+            if delay > 0:
+                self._stop.wait(delay)
+            self._file_next = max(self._file_next + self._file_interval, time.perf_counter())
+
+        ok, frame = self._cap.read()
+        if (not ok or frame is None) and self._file_interval:
+            self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # конец файла — с начала
+            ok, frame = self._cap.read()
+        if not ok or frame is None:
+            self._release()
+            self.status = "error"
+            self.error = "Камера не отдаёт кадры — возможно, она занята или нет доступа. Переподключение…"
+            self._placeholder("Камера не отдаёт кадры\n" + camera_hint())
+            self._stop.wait(1)
+            return None
+        return frame
+
+    def _read_browser(self) -> np.ndarray | None:
+        """Кадр, присланный страницей (камера браузера, телефона или захват экрана)."""
+        self._release()
+        self.backend = "браузер"
+        with self._push_cond:
+            self._push_cond.wait_for(lambda: self._push_id != self._push_seen or self._stop.is_set(), timeout=1.0)
+            if self._push_id == self._push_seen:
+                frame = None
+            else:
+                frame, self._push_seen = self._pushed, self._push_id
+        if frame is None and time.monotonic() - self._push_time > 2:
+            self.status = "waiting_browser"
+            self.error = None
+            self.fps = 0.0
+            self._placeholder("Ожидание трансляции из браузера…\n"
+                              "Откройте панель «Источник видео» и нажмите «Начать трансляцию»")
+        return frame
+
     def _loop(self):
-        cap = None
-        opened_key = None
         last_t = time.perf_counter()
 
         while not self._stop.is_set():
             s = self.store.get()
 
-            # Модель: подгружаем/меняем, если выбрана другая
-            if s.detect_enabled and self.detector.model_name != s.model:
+            # Модель: подгружаем/меняем, если выбрана другая модель или устройство
+            if s.detect_enabled and self.detector.needs_reload(s.model, s.device):
                 self.status = "loading_model"
-                self._placeholder(f"Загрузка модели {s.model}…\nПри первом запуске веса скачиваются из интернета")
+                self._placeholder(f"Загрузка модели {s.model}…\nПри первом выборе веса скачиваются из интернета")
                 try:
-                    self.detector.ensure_model(s.model)
+                    self.detector.ensure_model(s.model, s.device)
                     self.error = None
                 except Exception as e:  # noqa: BLE001
                     self.error = f"Ошибка загрузки модели: {e}"
                     self._placeholder(f"Не удалось загрузить модель {s.model}\n{model_download_hint()}")
-                    time.sleep(3)
+                    self._stop.wait(3)
                     continue
 
-            # Камера: (пере)открываем при смене источника или разрешения
-            key = (s.camera_source, s.width, s.height)
-            if cap is None or key != opened_key:
-                if cap is not None:
-                    cap.release()
-                self.status = "opening"
-                cap = self._open(*key)
-                opened_key = key
-                if not cap.isOpened():
-                    cap.release()
-                    cap = None
-                    self.status = "error"
-                    self.error = f"Не удалось открыть камеру «{s.camera_source}»"
-                    self._placeholder(self.error + "\n" + camera_hint())
-                    self._stop.wait(2)
-                    continue
-
-            ok, frame = cap.read()
-            if not ok or frame is None:
-                cap.release()
-                cap = None
-                self.status = "error"
-                self.error = "Камера не отдаёт кадры — возможно, она занята или нет доступа. Переподключение…"
-                self._placeholder("Камера не отдаёт кадры\n" + camera_hint())
-                self._stop.wait(1)
+            frame = self._read_browser() if s.camera_source == "browser" else self._read_device(s)
+            if frame is None:
                 continue
 
             if s.mirror:
@@ -172,9 +246,9 @@ class CameraWorker:
                 self.fps = 1 / dt if self.fps == 0 else self.fps * 0.9 + (1 / dt) * 0.1
 
             self.status = "running"
+            self.frame_source = s.camera_source
             self.frame_size = (frame.shape[1], frame.shape[0])
             annotated = annotate(frame, dets, s, self.fps)
             self._publish(annotated, frame, dets, s.jpeg_quality)
 
-        if cap is not None:
-            cap.release()
+        self._release()

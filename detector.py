@@ -101,30 +101,42 @@ class Detector:
         self.model = None
         self.model_name: str | None = None
         self.names: dict[int, str] = {}
-        self.set_device(device)
-
-    def set_device(self, device: str = "auto") -> None:
-        """auto: видеокарта NVIDIA (cuda) → графика Apple Silicon (mps) → процессор."""
-        self.device = pick_device(device)
+        self._resolved: dict[str, str] = {}
+        self.requested_device = "auto"
+        self.device = self.resolve_device(device)
         self.device_title = device_title(self.device)
 
-    def ensure_model(self, name: str) -> None:
-        """Загружает модель (при первом запуске — скачивает веса)."""
-        if self.model is not None and self.model_name == name:
+    def resolve_device(self, requested: str) -> str:
+        """auto → видеокарта NVIDIA (cuda) → графика Apple Silicon (mps) → процессор."""
+        if requested not in self._resolved:
+            self._resolved[requested] = pick_device(requested)
+        return self._resolved[requested]
+
+    def needs_reload(self, name: str, device: str) -> bool:
+        return self.model is None or self.model_name != name or self.device != self.resolve_device(device)
+
+    def ensure_model(self, name: str, device: str | None = None) -> None:
+        """Загружает модель на нужное устройство (при первом запуске — скачивает веса)."""
+        device = self.requested_device if device is None else device
+        if not self.needs_reload(name, device):
             return
         with self._lock:
-            if self.model is not None and self.model_name == name:
+            if not self.needs_reload(name, device):
                 return
             from ultralytics import YOLO  # тяжёлый импорт — только когда нужно
 
-            print(f"[detector] Загрузка модели {name} ...")
+            target = self.resolve_device(device)
+            print(f"[detector] Загрузка модели {name} на {device_title(target)} ...")
             model = YOLO(str(self.models_dir / name))
+            model.to(target)
             self.model, self.model_name = model, name
+            self.requested_device, self.device = device, target
+            self.device_title = device_title(target)
             self.names = {int(k): v for k, v in model.names.items()}
             print(f"[detector] Модель {name} готова, классов: {len(self.names)}")
 
     def detect(self, frame: np.ndarray, s: Settings) -> list[Detection]:
-        self.ensure_model(s.model)
+        self.ensure_model(s.model, s.device)
         class_ids = None
         if s.classes:
             wanted = set(s.classes)
