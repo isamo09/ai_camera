@@ -6,3 +6,4 @@ settings.json
 .idea/
 *.zip
 ~$*
+*.ts

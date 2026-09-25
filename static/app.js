@@ -1,6 +1,6 @@
 // Страница камеры: живые данные, настройки и снимки
-const PEOPLE_ANIMALS = ["person", "bird", "cat", "dog", "horse", "sheep", "cow",
-                        "elephant", "bear", "zebra", "giraffe", "teddy bear"];
+const PEOPLE_ANIMALS = ["person", "man", "woman", "boy", "girl", "human face", "animal", "mammal", "bird", "cat",
+                        "dog", "horse", "sheep", "cow", "cattle", "elephant", "bear", "zebra", "giraffe", "teddy bear"];
 
 let settings = {};
 let classes = [];
@@ -103,11 +103,69 @@ function renderModelInfo() {
   const row = (label, value, pct) => `<div class="mi-row"><span>${label}</span><b>${value}</b></div>` +
     (pct !== undefined ? `<div class="mi-bar"><span style="width:${pct}%"></span></div>` : "");
   box.innerHTML =
-    row("Точность (mAP50-95, COCO)", `${m.map}%`, Math.round((m.map / 60) * 100)) +
+    row("Классов", m.open_vocab ? "любые — свои названия" : `${m.classes} (${m.dataset})`) +
+    row(`Точность (mAP50-95, ${m.dataset})`, `${m.map}%`, Math.round((m.map / 60) * 100)) +
     row("Параметров", `${m.params} млн`) +
     row("Вычислений на кадр", `${m.flops} млрд`) +
-    row("Скорость на CPU (офиц.)", `≈ ${Math.round(m.cpu_ms)} мс/кадр`, Math.round(Math.min(100, (m.cpu_ms / 530) * 100))) +
-    `<p class="muted small">${escapeHtml(m.hint)}. ${m.downloaded ? "Файл уже скачан." : "Будет скачана при выборе."}</p>`;
+    (m.cpu_ms ? row("Скорость на CPU (офиц.)", `≈ ${Math.round(m.cpu_ms)} мс/кадр`,
+                    Math.round(Math.min(100, (m.cpu_ms / 860) * 100))) : "") +
+    `<p class="muted small">${escapeHtml(m.hint)}. ${m.downloaded ? "Файл уже скачан." : "Будет скачана при выборе."}` +
+    (m.dataset !== "COCO" ? " Точность измерена на другом наборе данных, поэтому с моделями COCO напрямую не сравнивается." : "") +
+    `</p>`;
+  renderVocab();
+}
+
+// ------------------------------------------------------------ свои названия (YOLOE)
+let vocab = { items: [], applied: [] };
+const selectedModel = () => models.find((x) => x.id === $("#modelSelect").value);
+
+async function loadVocab() {
+  try { vocab = await api("/api/vocab"); } catch { /* сервер перезапускается */ }
+  renderVocab();
+}
+
+function renderVocab() {
+  const m = selectedModel();
+  const card = $("#vocabCard");
+  if (!card) return;
+  card.hidden = !(m && m.open_vocab);
+  if (card.hidden) return;
+  const applied = new Set(vocab.applied || []);
+  $("#vocabList").innerHTML = (vocab.items || []).map((it, i) => {
+    const warn = !it.known ? ` <span class="vocab-warn" title="Перевод не найден — укажите: ${escapeHtml(it.label)} = english">⚠</span>` : "";
+    const state = applied.has(it.prompt) ? "" : " pending";
+    return `<span class="chip vocab-chip${state}" title="Запрос к модели: ${escapeHtml(it.prompt)}">` +
+      `${escapeHtml(it.label)}${it.prompt !== it.label.toLowerCase() ? ` <i>→ ${escapeHtml(it.prompt)}</i>` : ""}${warn}` +
+      `<button data-i="${i}" aria-label="Удалить">×</button></span>`;
+  }).join("") || `<span class="muted small">Список пуст — добавьте названия, которые нужно искать.</span>`;
+}
+
+async function saveVocab(list) {
+  settings = await api("/api/settings", { method: "POST", body: { custom_classes: list } });
+  await loadVocab();
+}
+
+function bindVocab() {
+  const add = async () => {
+    const input = $("#vocabInput");
+    const parts = input.value.split(/[,;\n]/).map((x) => x.trim()).filter(Boolean);
+    if (!parts.length) return;
+    input.value = "";
+    await saveVocab([...settings.custom_classes, ...parts]);
+    const unknown = vocab.items.filter((it) => !it.known && parts.includes(it.entry));
+    if (unknown.length) toast(`Нет перевода для: ${unknown.map((u) => escapeHtml(u.entry)).join(", ")}. ` +
+      `Модель понимает английский — напишите, например, «${escapeHtml(unknown[0].entry)} = …»`, "error", 8000);
+  };
+  $("#vocabAdd").addEventListener("click", add);
+  $("#vocabInput").addEventListener("keydown", (e) => e.key === "Enter" && add());
+  $("#vocabList").addEventListener("click", (e) => {
+    const i = e.target.dataset.i;
+    if (i === undefined) return;
+    const list = [...settings.custom_classes];
+    list.splice(Number(i), 1);
+    saveVocab(list);
+  });
+  $("#vocabClear").addEventListener("click", () => saveVocab([]));
 }
 
 async function loadDevices() {
@@ -282,7 +340,8 @@ function bindClasses() {
   });
   $("#classesAll").addEventListener("click", () => setClasses(classes.map((c) => c.name)));
   $("#classesNone").addEventListener("click", () => setClasses([]));
-  $("#classesPeople").addEventListener("click", () => setClasses(PEOPLE_ANIMALS));
+  $("#classesPeople").addEventListener("click", () =>
+    setClasses(classes.filter((c) => PEOPLE_ANIMALS.includes(c.name.toLowerCase())).map((c) => c.name)));
 }
 
 // ------------------------------------------------------------ живой статус
@@ -299,6 +358,7 @@ async function pollStatus() {
 }
 
 let lastModel = null;
+let lastVocab = null;
 
 function renderStatus(s) {
   const pill = $("#livePill");
@@ -314,6 +374,14 @@ function renderStatus(s) {
   if (s.model && s.model !== lastModel) {
     if (lastModel) loadModels();  // обновить отметки «скачана»
     lastModel = s.model;
+    loadClasses();               // у каждой модели свой список классов
+    loadVocab();
+  }
+  const vocabKey = (s.vocab || []).join("|");
+  if (vocabKey !== lastVocab) {  // свои названия применены — обновить классы и отметки
+    lastVocab = vocabKey;
+    loadClasses();
+    loadVocab();
   }
   $("#deviceInfo").textContent = `Сейчас используется: ${s.device}` +
     (devices.some((d) => d.fix) ? `. ${devices.find((d) => d.fix).fix}` : "");
@@ -370,6 +438,8 @@ async function init() {
   bindSettings();
   bindClasses();
   bindSource();
+  bindVocab();
+  loadVocab();
   loadHostCameras();
 
   $("#snapBtn").addEventListener("click", takeSnapshot);

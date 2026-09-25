@@ -12,9 +12,9 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from labels_ru import translate
+from labels_ru import CUSTOM_LABELS, parse_custom, translate
 from platform_info import device_title, find_font, pick_device
-from settings import Settings
+from settings import Settings, is_open_vocab
 
 # Шрифт с кириллицей под текущую ОС (cv2.putText русские буквы не умеет, поэтому рисуем через Pillow)
 FONT_PATH = find_font()
@@ -101,6 +101,8 @@ class Detector:
         self.model = None
         self.model_name: str | None = None
         self.names: dict[int, str] = {}
+        self.open_vocab = False
+        self.vocab: tuple[str, ...] | None = None
         self._resolved: dict[str, str] = {}
         self.requested_device = "auto"
         self.device = self.resolve_device(device)
@@ -123,20 +125,59 @@ class Detector:
         with self._lock:
             if not self.needs_reload(name, device):
                 return
-            from ultralytics import YOLO  # тяжёлый импорт — только когда нужно
+            from ultralytics import YOLO, YOLOE  # тяжёлый импорт — только когда нужно
 
             target = self.resolve_device(device)
             print(f"[detector] Загрузка модели {name} на {device_title(target)} ...")
-            model = YOLO(str(self.models_dir / name))
+            cls = YOLOE if name.startswith("yoloe") else YOLO
+            model = cls(str(self.models_dir / name))
             model.to(target)
             self.model, self.model_name = model, name
             self.requested_device, self.device = device, target
             self.device_title = device_title(target)
+            self.open_vocab = is_open_vocab(name)
+            self.vocab = None
+            CUSTOM_LABELS.clear()
             self.names = {int(k): v for k, v in model.names.items()}
-            print(f"[detector] Модель {name} готова, классов: {len(self.names)}")
+            print(f"[detector] Модель {name} готова"
+                  + (" (свои названия объектов)" if self.open_vocab else f", классов: {len(self.names)}"))
+
+    # ------------------------------------------------------------ свои названия (YOLOE)
+    @staticmethod
+    def vocab_for(entries: list[str]) -> tuple[list[str], dict[str, str]]:
+        """Запросы для модели и подписи к ним из введённых пользователем названий."""
+        prompts, labels = [], {}
+        for e in entries:
+            p = parse_custom(e)
+            if p["prompt"] and p["prompt"] not in labels:
+                prompts.append(p["prompt"])
+                labels[p["prompt"]] = p["label"]
+        return prompts, labels
+
+    def needs_vocab(self, s: Settings) -> bool:
+        return self.open_vocab and self.model is not None and \
+            tuple(self.vocab_for(s.custom_classes)[0]) != self.vocab
+
+    def ensure_vocab(self, entries: list[str]) -> None:
+        """Передаёт модели список названий. Первый раз скачивает текстовый кодировщик (~250 МБ)."""
+        prompts, labels = self.vocab_for(entries)
+        if not self.open_vocab or tuple(prompts) == self.vocab:
+            return
+        with self._lock:
+            if prompts:
+                print(f"[detector] Свои названия: {', '.join(prompts)}")
+                self.model.set_classes(prompts)
+            CUSTOM_LABELS.clear()
+            CUSTOM_LABELS.update(labels)
+            self.names = dict(enumerate(prompts))
+            self.vocab = tuple(prompts)
 
     def detect(self, frame: np.ndarray, s: Settings) -> list[Detection]:
         self.ensure_model(s.model, s.device)
+        if self.open_vocab:
+            self.ensure_vocab(s.custom_classes)
+            if not self.vocab:
+                return []  # список своих названий пуст — искать нечего
         class_ids = None
         if s.classes:
             wanted = set(s.classes)

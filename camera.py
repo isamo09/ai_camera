@@ -224,6 +224,19 @@ class CameraWorker:
                     self._stop.wait(3)
                     continue
 
+            # Свои названия для YOLOE: первый раз скачивается текстовый кодировщик
+            if s.detect_enabled and self.detector.needs_vocab(s):
+                self.status = "loading_model"
+                self._placeholder("Подготовка своих названий объектов…\n"
+                                  "В первый раз скачивается текстовая модель (около 250 МБ) — это несколько минут")
+                try:
+                    self.detector.ensure_vocab(s.custom_classes)
+                except Exception as e:  # noqa: BLE001
+                    self.error = f"Не удалось применить свои названия: {e}"
+                    self._placeholder("Не удалось подготовить свои названия\n" + model_download_hint())
+                    self._stop.wait(3)
+                    continue
+
             frame = self._read_browser() if s.camera_source == "browser" else self._read_device(s)
             if frame is None:
                 continue

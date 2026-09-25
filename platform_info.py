@@ -94,6 +94,35 @@ def lan_ips() -> list[str]:
     return ips
 
 
+_VPN_IFACE = ("vpn", "amnezia", "wireguard", "wg", "openvpn", "tun", "tap", "tailscale", "zerotier", "utun", "ppp")
+
+
+def vpn_ips() -> list[str]:
+    """Адреса VPN-адаптеров (WireGuard, AmneziaVPN, OpenVPN, Tailscale, ZeroTier…) — по ним страница
+    открывается с устройств, подключённых к той же VPN-сети."""
+    import ipaddress
+
+    cgnat = ipaddress.ip_network("100.64.0.0/10")  # Tailscale и другие оверлей-сети
+    ips = []
+    try:
+        import psutil
+
+        stats = psutil.net_if_stats()
+        for name, addrs in psutil.net_if_addrs().items():
+            n = name.lower()
+            if not any(k in n for k in _VPN_IFACE) or (name in stats and not stats[name].isup):
+                continue
+            for a in addrs:
+                if a.family != socket.AF_INET:
+                    continue
+                ip = ipaddress.ip_address(a.address)
+                if (ip.is_private or ip in cgnat) and not ip.is_link_local and not ip.is_loopback:
+                    ips.append(a.address)
+    except Exception:  # noqa: BLE001
+        pass
+    return ips
+
+
 def lan_ip() -> str | None:
     ips = lan_ips()
     return ips[0] if ips else None

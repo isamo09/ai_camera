@@ -36,8 +36,8 @@ import platform_info as pi
 from camera import CameraWorker
 from detector import FONT_PATH, Detector, summarize
 from gallery import Gallery
-from labels_ru import translate
-from settings import SettingsStore, available_models
+from labels_ru import parse_custom, translate
+from settings import SettingsStore, available_models, is_open_vocab
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -89,6 +89,7 @@ def api_status():
         device=detector.device_title,
         device_id=detector.device,
         source=s.camera_source,
+        vocab=list(detector.vocab or []),
         backend=worker.backend,
         os=pi.OS_NAME,
         total=len(dets),
@@ -146,6 +147,14 @@ def api_classes():
                     for i, n in sorted(detector.names.items())])
 
 
+@app.get("/api/vocab")
+def api_vocab():
+    """Разбор своих названий для моделей YOLOE: подпись, запрос к модели, найден ли перевод."""
+    s = store.get()
+    return jsonify(open_vocab=is_open_vocab(s.model), applied=list(detector.vocab or []),
+                   items=[parse_custom(e) for e in s.custom_classes])
+
+
 @app.post("/api/snapshot")
 def api_snapshot():
     data = request.get_json(silent=True) or {}
@@ -190,7 +199,13 @@ def main():
     args = parser.parse_args()
 
     if args.camera is not None:
-        store.update({"camera_source": args.camera}, save=False)  # только на этот запуск
+        camera = args.camera
+        if not camera.isdigit() and os.path.exists(camera):
+            camera = os.path.abspath(camera)  # относительный путь к видеофайлу — до смены папки
+        store.update({"camera_source": camera}, save=False)  # только на этот запуск
+    # Вспомогательные файлы Ultralytics (например, текстовый кодировщик YOLOE) скачиваются
+    # в текущую папку — пусть это будет models/, а не корень проекта
+    os.chdir(MODELS_DIR)
     if args.device:
         store.update({"device": args.device}, save=False)
 
@@ -227,6 +242,9 @@ def main():
         print(f"  С телефона / другого устройства в сети:  {scheme}://{ips[0]}:{port}")
         for other in ips[1:3]:
             print(f"                          или:              {scheme}://{other}:{port}")
+    if args.host == "0.0.0.0":
+        for vip in pi.vpn_ips():
+            print(f"  Через VPN (для устройств в той же VPN): {scheme}://{vip}:{port}")
         if not ssl_context:
             print("  (камера телефона через браузер работает только по HTTPS — запустите с --https)")
     if ssl_context:
