@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Галерея — AI Камера{% endblock %}
+{% block content %}
+<main class="gallery-page">
+  <div class="gallery-toolbar">
+    <h1>Галерея снимков</h1>
+    <input type="search" id="gallerySearch" placeholder="Поиск: «человек», «кошка», подпись…">
+  </div>
+  <div id="grid" class="grid"></div>
+  <p id="empty" class="empty" hidden>Снимков пока нет. Сделайте первый на странице <a href="/">камеры</a>.</p>
+</main>
+
+<div id="lightbox" class="lightbox" hidden>
+  <button class="lb-close" id="lbClose" aria-label="Закрыть">✕</button>
+  <div class="lb-body">
+    <img id="lbImg" alt="">
+    <div class="lb-info">
+      <div class="lb-date" id="lbDate"></div>
+      <div class="chips" id="lbChips"></div>
+      <pre id="lbDesc"></pre>
+      <label class="field">Подпись
+        <textarea id="lbNote" rows="3" maxlength="500"></textarea>
+      </label>
+      <div class="row-btns">
+        <button class="btn primary small" id="lbSave">Сохранить подпись</button>
+        <button class="btn small" id="lbToggle">Показать оригинал</button>
+        <a class="btn small" id="lbDownload" download>Скачать</a>
+        <button class="btn small danger" id="lbDelete">Удалить</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='gallery.js') }}"></script>{% endblock %}

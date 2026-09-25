@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}AI Камера{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/"><span class="brand-dot"></span>AI Камера</a>
+    <nav>
+      <a href="/" class="{{ 'active' if page == 'camera' }}">Камера</a>
+      <a href="/gallery" class="{{ 'active' if page == 'gallery' }}">Галерея <span id="galleryCount" class="badge"></span></a>
+    </nav>
+  </header>
+  {% block content %}{% endblock %}
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="{{ url_for('static', filename='common.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
