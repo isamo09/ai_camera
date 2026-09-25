@@ -109,8 +109,9 @@
 
     <details class="card" open id="vocabCard" hidden>
       <summary>Свои названия объектов</summary>
-      <p class="muted small">Модель YOLOE ищет всё, что вы впишете. Можно по-русски (известные слова переводятся
-        автоматически), по-английски или в виде «подпись = english», например «кружка с котом = cat mug».</p>
+      <p class="muted small">Модель YOLOE ищет всё, что вы впишете, но понимает только английский. Русские названия
+        переводит встроенный переводчик (✎): «красная машина» → red car. Если слово не перевелось (⚠), напишите
+        «подпись = english», например «кружка с котом = cat mug».</p>
       <div class="inline">
         <input type="text" id="vocabInput" maxlength="200" placeholder="очки, кружка, red car…">
         <button class="btn small primary" id="vocabAdd">Добавить</button>

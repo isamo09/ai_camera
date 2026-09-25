@@ -132,10 +132,13 @@ function renderVocab() {
   if (card.hidden) return;
   const applied = new Set(vocab.applied || []);
   $("#vocabList").innerHTML = (vocab.items || []).map((it, i) => {
-    const warn = !it.known ? ` <span class="vocab-warn" title="Перевод не найден — укажите: ${escapeHtml(it.label)} = english">⚠</span>` : "";
+    const missing = (it.missing || []).join(", ") || it.label;
+    const warn = !it.known ? ` <span class="vocab-warn" title="Не удалось перевести: ${escapeHtml(missing)}. ` +
+      `Укажите вручную: ${escapeHtml(it.label)} = english">⚠</span>` : "";
+    const auto = it.auto && it.known ? ` <span class="muted" title="Переведено встроенным переводчиком">✎</span>` : "";
     const state = applied.has(it.prompt) ? "" : " pending";
     return `<span class="chip vocab-chip${state}" title="Запрос к модели: ${escapeHtml(it.prompt)}">` +
-      `${escapeHtml(it.label)}${it.prompt !== it.label.toLowerCase() ? ` <i>→ ${escapeHtml(it.prompt)}</i>` : ""}${warn}` +
+      `${escapeHtml(it.label)}${it.prompt !== it.label.toLowerCase() ? ` <i>→ ${escapeHtml(it.prompt)}</i>` : ""}${auto}${warn}` +
       `<button data-i="${i}" aria-label="Удалить">×</button></span>`;
   }).join("") || `<span class="muted small">Список пуст — добавьте названия, которые нужно искать.</span>`;
 }
@@ -153,7 +156,7 @@ function bindVocab() {
     input.value = "";
     await saveVocab([...settings.custom_classes, ...parts]);
     const unknown = vocab.items.filter((it) => !it.known && parts.includes(it.entry));
-    if (unknown.length) toast(`Нет перевода для: ${unknown.map((u) => escapeHtml(u.entry)).join(", ")}. ` +
+    if (unknown.length) toast(`Не удалось перевести: ${unknown.map((u) => escapeHtml((u.missing || []).join(", ") || u.entry)).join("; ")}. ` +
       `Модель понимает английский — напишите, например, «${escapeHtml(unknown[0].entry)} = …»`, "error", 8000);
   };
   $("#vocabAdd").addEventListener("click", add);

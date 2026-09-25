@@ -101,6 +101,11 @@ for _en, _ru in list(OIV7_RU.items()) + list(RU_LABELS.items()):
     RU_TO_EN[_ru.lower()] = _clean(_en)
 EN_TO_RU: dict[str, str] = {_clean(en): ru for en, ru in list(OIV7_RU.items()) + list(RU_LABELS.items())}
 
+# Простейший локальный переводчик фраз: словарь фраз + названия всех классов
+from translator import build as _build_translator, translate as local_translate  # noqa: E402
+
+_build_translator(RU_TO_EN)
+
 
 def translate(name: str, lang: str = "ru") -> str:
     """Возвращает название класса на нужном языке (для неизвестных — как есть)."""
@@ -126,8 +131,13 @@ def parse_custom(entry: str) -> dict:
     if "=" in entry:
         label, prompt = (p.strip() for p in entry.split("=", 1))
         return {"entry": entry, "label": label or prompt, "prompt": prompt.lower() or label.lower(),
-                "known": bool(prompt) and not has_cyrillic(prompt)}
+                "known": bool(prompt) and not has_cyrillic(prompt), "auto": False, "missing": []}
     if has_cyrillic(entry):
         en = RU_TO_EN.get(entry.lower())
-        return {"entry": entry, "label": entry, "prompt": en or entry.lower(), "known": en is not None}
-    return {"entry": entry, "label": EN_TO_RU.get(entry.lower(), entry), "prompt": entry.lower(), "known": True}
+        if en:  # точное название класса из словаря
+            return {"entry": entry, "label": entry, "prompt": en, "known": True, "auto": False, "missing": []}
+        # фраза — переводим по словам встроенным переводчиком
+        en, missing = local_translate(entry)
+        return {"entry": entry, "label": entry, "prompt": en, "known": not missing, "auto": True, "missing": missing}
+    return {"entry": entry, "label": EN_TO_RU.get(entry.lower(), entry), "prompt": entry.lower(),
+            "known": True, "auto": False, "missing": []}
