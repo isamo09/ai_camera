@@ -236,16 +236,10 @@ def pick_device(preferred: str = "auto") -> str:
 
 def nvidia_gpus_from_driver() -> list[str]:
     """Видеокарты NVIDIA по данным драйвера (даже если PyTorch собран без CUDA)."""
-    if MACOS:
-        return []
-    import subprocess
+    from bootstrap import nvidia_smi
 
-    try:
-        out = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
-                             capture_output=True, text=True, timeout=10)
-        return [ln.strip() for ln in out.stdout.splitlines() if ln.strip()] if out.returncode == 0 else []
-    except (OSError, subprocess.SubprocessError):
-        return []
+    out = nvidia_smi("--query-gpu=name", "--format=csv,noheader")
+    return [ln.strip() for ln in (out or "").splitlines() if ln.strip()]
 
 
 _devices_cache: list[dict] | None = None
@@ -266,10 +260,18 @@ def list_devices() -> list[dict]:
         devices.append({"id": f"cuda:{i}", "available": True,
                         "title": f"Видеокарта NVIDIA: {props.name} ({props.total_memory / 1024**3:.0f} ГБ)"})
     if cuda_count == 0:
-        for name in nvidia_gpus_from_driver():
+        from bootstrap import linux_nvidia_hardware
+
+        names = nvidia_gpus_from_driver()
+        for name in names:
             devices.append({"id": "cuda:0", "available": False,
                             "title": f"Видеокарта NVIDIA: {name} — недоступна, установлен PyTorch без CUDA",
-                            "fix": "Удалите папку .venv и запустите main.py заново — будет установлен PyTorch с CUDA"})
+                            "fix": "Остановите программу и выполните: python main.py --install-cuda"})
+        if not names and linux_nvidia_hardware():
+            devices.append({"id": "cuda:0", "available": False,
+                            "title": "Видеокарта NVIDIA — недоступна, не установлен драйвер",
+                            "fix": "Установите драйвер NVIDIA (например, sudo ubuntu-drivers install), "
+                                   "перезагрузитесь и выполните: python main.py --install-cuda"})
     if torch is not None and _mps_available(torch):
         devices.append({"id": "mps", "title": "Графика Apple Silicon (Metal)", "available": True})
     _devices_cache = devices

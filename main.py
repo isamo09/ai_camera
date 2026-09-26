@@ -23,6 +23,8 @@ if __name__ == "__main__":
     import bootstrap
 
     bootstrap.ensure_environment()  # до импорта сторонних библиотек
+    if "--install-cuda" in sys.argv:  # до импорта PyTorch, иначе Windows не даст заменить его файлы
+        sys.exit(bootstrap.install_cuda_command())
 
 import argparse
 import threading
@@ -196,6 +198,8 @@ def main():
     parser.add_argument("--https", action="store_true",
                         help="HTTPS с самоподписанным сертификатом — нужен для камеры телефона по локальной сети")
     parser.add_argument("--no-browser", action="store_true", help="не открывать браузер автоматически")
+    parser.add_argument("--install-cuda", action="store_true",
+                        help="включить видеокарту NVIDIA: поставить PyTorch со сборкой CUDA под драйвер и выйти")
     args = parser.parse_args()
 
     if args.camera is not None:
