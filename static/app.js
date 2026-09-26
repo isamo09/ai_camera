@@ -360,6 +360,41 @@ async function pollStatus() {
   }
 }
 
+// ------------------------------------------------------------ формат видео и развёрнутый вид
+let videoAspect = "";
+
+function updateVideoLayout(frameSize) {
+  const img = $("#video");
+  // размер текущего кадра потока (в том числе заставки), иначе — последнего кадра с камеры
+  const w = img.naturalWidth || (frameSize && frameSize[0]);
+  const h = img.naturalHeight || (frameSize && frameSize[1]);
+  if (!w || !h) return;
+  const key = `${w}x${h}`;
+  if (key === videoAspect) return;
+  videoAspect = key;
+  const wrap = $("#videoWrap");
+  wrap.style.setProperty("--ar", `${w} / ${h}`);
+  wrap.style.setProperty("--arn", (w / h).toFixed(4));
+  wrap.classList.toggle("portrait", h > w * 1.05);
+}
+
+function setVideoExpanded(on) {
+  const wrap = $("#videoWrap");
+  wrap.classList.toggle("expanded", on);
+  document.body.classList.toggle("video-expanded", on);
+  $("#expandBtn").textContent = on ? "✕" : "⛶";
+  $("#expandBtn").setAttribute("aria-label", on ? "Свернуть" : "Развернуть на весь экран");
+  wrap.title = on ? "Нажмите или Esc, чтобы свернуть" : "Нажмите, чтобы развернуть на весь экран";
+}
+
+function bindVideoExpand() {
+  const wrap = $("#videoWrap");
+  wrap.addEventListener("click", () => setVideoExpanded(!wrap.classList.contains("expanded")));
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && wrap.classList.contains("expanded")) setVideoExpanded(false);
+  });
+}
+
 let lastModel = null;
 let lastVocab = null;
 
@@ -392,6 +427,7 @@ function renderStatus(s) {
   pill.className = `live-pill ${s.status}`;
   $("#liveText").textContent = s.error && s.status !== "running" ? s.error : (texts[s.status] || s.status);
 
+  updateVideoLayout(s.frame_size);
   $("#statTotal").textContent = s.total;
   $("#statKinds").textContent = s.counts.length;
   $("#statFps").textContent = s.fps;
@@ -442,6 +478,7 @@ async function init() {
   bindClasses();
   bindSource();
   bindVocab();
+  bindVideoExpand();
   loadVocab();
   loadHostCameras();
 

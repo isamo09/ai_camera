@@ -47,9 +47,29 @@ details.card > summary::before { content: "▸"; color: var(--muted); transition
 details.card[open] > summary::before { transform: rotate(90deg); }
 details.card[open] > summary { margin-bottom: 12px; }
 
+/* Блок видео подстраивается под соотношение сторон кадра (--ar задаёт app.js по размеру кадра):
+   горизонтальное видео — целиком; вертикальное — центральная часть, по нажатию разворачивается. */
 .video-wrap { position: relative; background: #000; border-radius: var(--radius); overflow: hidden;
-  border: 1px solid var(--border); aspect-ratio: 16 / 9; display: grid; place-items: center; }
-.video-wrap img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  border: 1px solid var(--border); aspect-ratio: var(--ar, 16 / 9); max-height: 78vh;
+  width: min(100%, calc(78vh * var(--arn, 1.7778)));  /* упёрлись в высоту — сужаемся, сохраняя пропорции */
+  margin: 0 auto; display: grid; place-items: center; cursor: zoom-in; }
+/* картинка заполняет блок целиком; размер блока задаёт только соотношение сторон */
+.video-wrap img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
+.video-wrap.portrait { aspect-ratio: 4 / 3; width: min(100%, calc(78vh * 4 / 3)); }
+.video-wrap.portrait img { object-fit: cover; object-position: center; }
+.expand-hint { display: none; position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+  padding: 6px 14px; border-radius: 20px; background: rgba(0,0,0,.65); font-size: 13px; white-space: nowrap;
+  pointer-events: none; }
+.video-wrap.portrait:not(.expanded) .expand-hint { display: block; }
+.expand-btn { position: absolute; right: 10px; bottom: 10px; width: 34px; height: 34px; border-radius: 8px;
+  border: 0; background: rgba(0,0,0,.55); color: #fff; font-size: 18px; cursor: pointer; opacity: .75; }
+.expand-btn:hover { opacity: 1; }
+/* Развёрнутый вид: весь экран, кадр целиком без обрезки */
+.video-wrap.expanded { position: fixed; inset: 0; z-index: 70; width: auto; max-height: none; aspect-ratio: auto;
+  border: 0; border-radius: 0; cursor: zoom-out; }
+.video-wrap.expanded img, .video-wrap.portrait.expanded img { object-fit: contain; }
+body.video-expanded { overflow: hidden; }
+@media (max-width: 600px) { .expand-hint { font-size: 12px; white-space: normal; width: 80%; text-align: center; } }
 .flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
 .flash.go { animation: flash .45s ease-out; }
 @keyframes flash { from { opacity: .85; } to { opacity: 0; } }

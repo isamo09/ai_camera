@@ -2,10 +2,12 @@
 {% block content %}
 <main class="layout">
   <section class="stage">
-    <div class="video-wrap">
+    <div class="video-wrap" id="videoWrap" title="Нажмите, чтобы развернуть на весь экран">
       <img id="video" src="/video_feed" alt="Видеопоток с камеры">
       <div class="flash" id="flash"></div>
       <div class="live-pill" id="livePill"><span class="dot"></span><span id="liveText">Подключение…</span></div>
+      <div class="expand-hint" id="expandHint">⤢ Вертикальное видео — нажмите, чтобы развернуть целиком</div>
+      <button class="expand-btn" id="expandBtn" type="button" aria-label="Развернуть на весь экран">⛶</button>
     </div>
 
     <div class="snap-bar">
